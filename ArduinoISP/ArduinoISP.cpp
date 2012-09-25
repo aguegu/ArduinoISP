@@ -75,7 +75,7 @@ uint8_t write_flash_pages(int length);
 
 void setup()
 {
-	Serial.begin(9600);
+	Serial.begin(19200);
 	SPI.setDataMode(0);
 	SPI.setBitOrder(MSBFIRST);
 	// Clock Div can be 2,4,8,16,32,64, or 128
@@ -124,7 +124,7 @@ void heartbeat()
 		hbdelta = -hbdelta;
 	hbval += hbdelta;
 	analogWrite(LED_HB, hbval);
-	delay(40);
+	delay(20);
 }
 
 void loop(void)
