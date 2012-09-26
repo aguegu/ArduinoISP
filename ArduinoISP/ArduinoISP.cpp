@@ -412,10 +412,9 @@ uint8_t write_eeprom_chunk(uint16_t start, uint16_t length)
 
 void program_page()
 {
-	char result = (char) STK_FAILED;
-	int length = 256 * getch();
-	length += getch();
-	char memtype = getch();
+	uint8_t result = STK_FAILED;
+	uint16_t length = makeWord(getch(), getch());
+	uint8_t memtype = getch();
 	// flash memory @here, (length) bytes
 	if (memtype == 'F')
 	{
@@ -424,7 +423,7 @@ void program_page()
 	}
 	if (memtype == 'E')
 	{
-		result = (char) write_eeprom(length);
+		result = write_eeprom(length);
 		if (getch() == CRC_EOP)
 		{
 			Serial.write(STK_INSYNC);
@@ -475,8 +474,6 @@ char eeprom_read_page(uint16_t length)
 void read_page()
 {
 	uint8_t result = STK_FAILED;
-//	int length = 256 * getch();
-//	length += getch();
 	uint16_t length = makeWord(getch(), getch());
 	uint8_t memtype = getch();
 
