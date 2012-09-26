@@ -64,8 +64,9 @@
 #define STK_INSYNC  0x14
 #define STK_NOSYNC  0x15
 #define CRC_EOP     0x20 //ok it is a space...
+#define PTIME 30
 
-void pulse(int pin, int times);
+void pulse(uint8_t pin, uint8_t times);
 
 void avrisp();
 void breply(uint8_t b);
@@ -148,6 +149,7 @@ uint8_t getch()
 		;
 	return Serial.read();
 }
+
 void fill(int n)
 {
 	for (int x = 0; x < n; x++)
@@ -156,16 +158,15 @@ void fill(int n)
 	}
 }
 
-#define PTIME 30
-void pulse(int pin, int times)
+void pulse(uint8_t pin, uint8_t times)
 {
-	do
+	while (times--)
 	{
 		digitalWrite(pin, HIGH);
 		delay(PTIME);
 		digitalWrite(pin, LOW);
 		delay(PTIME);
-	} while (times--);
+	}
 }
 
 void prog_lamp(int state)
@@ -176,11 +177,9 @@ void prog_lamp(int state)
 
 uint8_t spi_transaction(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
-	uint8_t n;
 	SPI.transfer(a);
-	n = SPI.transfer(b);
-	//if (n != a) error = -1;
-	n = SPI.transfer(c);
+	SPI.transfer(b);
+	SPI.transfer(c);
 	return SPI.transfer(d);
 }
 
@@ -200,7 +199,7 @@ void empty_reply()
 
 void breply(uint8_t b)
 {
-	if (CRC_EOP == getch())
+	if (getch() == CRC_EOP)
 	{
 		Serial.write(STK_INSYNC);
 		Serial.write(b);
@@ -254,8 +253,8 @@ void set_parameters()
 	param.eeprom_size = beget16(&buff[14]);
 
 	// 32 bits flashsize (big endian)
-	param.flash_size = buff[16] * 0x01000000 + buff[17] * 0x00010000
-			+ buff[18] * 0x00000100 + buff[19];
+	param.flash_size = buff[16] * 0x01000000UL + buff[17] * 0x00010000UL
+			+ buff[18] * 0x00000100UL + buff[19];
 
 }
 
@@ -268,7 +267,7 @@ void start_pmode()
 	delay(20);
 	digitalWrite(RESET, LOW);
 	spi_transaction(0xAC, 0x53, 0x00, 0x00);
-	pmode = 1;
+	pmode = true;
 }
 
 void end_pmode()
@@ -276,7 +275,7 @@ void end_pmode()
 	SPI.end();
 	digitalWrite(RESET, HIGH);
 	pinMode(RESET, INPUT);
-	pmode = 0;
+	pmode = false;
 }
 
 void universal()
@@ -292,11 +291,14 @@ void flash(uint8_t hilo, int addr, uint8_t data)
 {
 	spi_transaction(0x40 + 0x08 * hilo, highByte(addr), lowByte(addr), data);
 }
+
 void commit(int addr)
 {
 	if (PROG_FLICKER)
 		prog_lamp (LOW);
+
 	spi_transaction(0x4C, highByte(addr), lowByte(addr), 0);
+
 	if (PROG_FLICKER)
 	{
 		delay(PTIME);
@@ -305,23 +307,33 @@ void commit(int addr)
 }
 
 //#define _current_page(x) (here & 0xFFFFE0)
-int current_page(int addr)
+uint16_t current_page(int addr)
 {
-	if (param.page_size == 32)
-		return here & 0xFFFFFFF0;
-	if (param.page_size == 64)
-		return here & 0xFFFFFFE0;
-	if (param.page_size == 128)
-		return here & 0xFFFFFFC0;
-	if (param.page_size == 256)
-		return here & 0xFFFFFF80;
-	return here;
+	uint16_t page = addr;
+
+	switch (param.page_size)
+	{
+	case 32:
+		page &= 0xFFFFFFF0;
+		break;
+	case 64:
+		page &= 0xFFFFFFE0;
+		break;
+	case 128:
+		page &= 0xFFFFFFC0;
+		break;
+	case 256:
+		page &= 0xFFFFFF80;
+		break;
+	}
+
+	return page;
 }
 
 void write_flash(int length)
 {
 	fill(length);
-	if (CRC_EOP == getch())
+	if (getch() == CRC_EOP)
 	{
 		Serial.write(STK_INSYNC);
 		Serial.write(write_flash_pages(length));
@@ -336,7 +348,7 @@ void write_flash(int length)
 uint8_t write_flash_pages(int length)
 {
 	int x = 0;
-	int page = current_page(here);
+	uint16_t page = current_page(here);
 	while (x < length)
 	{
 		if (page != current_page(here))
@@ -406,7 +418,7 @@ void program_page()
 	if (memtype == 'E')
 	{
 		result = (char) write_eeprom(length);
-		if (CRC_EOP == getch())
+		if (getch() == CRC_EOP)
 		{
 			Serial.write(STK_INSYNC);
 			Serial.write(result);
@@ -447,8 +459,7 @@ char eeprom_read_page(int length)
 	for (int x = 0; x < length; x++)
 	{
 		int addr = start + x;
-		uint8_t ee = spi_transaction(0xA0, (addr >> 8) & 0xFF, addr & 0xFF,
-				0xFF);
+		uint8_t ee = spi_transaction(0xA0, highByte(addr), lowByte(addr), 0x00);
 		Serial.write(ee);
 	}
 	return STK_OK;
@@ -460,19 +471,22 @@ void read_page()
 	int length = 256 * getch();
 	length += getch();
 	char memtype = getch();
-	if (CRC_EOP != getch())
+
+	if (getch() != CRC_EOP)
 	{
 		error++;
 		Serial.write(STK_NOSYNC);
 		return;
 	}
+
 	Serial.write(STK_INSYNC);
+
 	if (memtype == 'F')
 		result = flash_read_page(length);
 	if (memtype == 'E')
 		result = eeprom_read_page(length);
+
 	Serial.write(result);
-	return;
 }
 
 void read_signature()
@@ -483,6 +497,7 @@ void read_signature()
 		Serial.write(STK_NOSYNC);
 		return;
 	}
+
 	Serial.write(STK_INSYNC);
 	uint8_t high = spi_transaction(0x30, 0x00, 0x00, 0x00);
 	Serial.write(high);
@@ -591,7 +606,7 @@ void avrisp()
 		// anything else we will return STK_UNKNOWN
 	default:
 		error++;
-		if (CRC_EOP == getch())
+		if (getch() == CRC_EOP)
 			Serial.write(STK_UNKNOWN);
 		else
 			Serial.write(STK_NOSYNC);
