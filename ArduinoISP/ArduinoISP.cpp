@@ -71,34 +71,13 @@
 #define EECHUNK (32)
 
 void pulse(uint8_t pin, uint8_t times);
-
 void avrisp();
-
 void reply(bool has_byte = false, byte val = 0x00, bool send_ok = true);
 uint8_t getch();
 
-uint8_t writeFlashPage(uint16_t address, uint16_t length);
-
 uint8_t error = false;
 uint8_t inProgramming = false;
-// address for reading and writing, set by 'U' command
 uint8_t buff[256]; // global block storage
-
-void setup()
-{
-	Serial.begin(115200);
-	SPI.setDataMode(0);
-	SPI.setBitOrder(MSBFIRST);
-	// Clock Div can be 2,4,8,16,32,64, or 128
-	SPI.setClockDivider(SPI_CLOCK_DIV64);
-
-	pinMode(LED_IN_PROGRAME, OUTPUT);
-	pulse(LED_IN_PROGRAME, 2);
-	pinMode(LED_ERROR, OUTPUT);
-	pulse(LED_ERROR, 2);
-	pinMode(LED_HEATBEAT, OUTPUT);
-	pulse(LED_HEATBEAT, 2);
-}
 
 typedef struct param
 {
@@ -118,6 +97,24 @@ typedef struct param
 } parameter;
 
 parameter param;
+
+void setup()
+{
+	Serial.begin(115200);
+	SPI.setDataMode(0);
+	SPI.setBitOrder(MSBFIRST);
+	// Clock Div can be 2,4,8,16,32,64, or 128
+	SPI.setClockDivider(SPI_CLOCK_DIV64);
+
+	pinMode(LED_IN_PROGRAME, OUTPUT);
+	pulse(LED_IN_PROGRAME, 2);
+	pinMode(LED_ERROR, OUTPUT);
+	pulse(LED_ERROR, 2);
+	pinMode(LED_HEATBEAT, OUTPUT);
+	pulse(LED_HEATBEAT, 2);
+}
+
+
 
 // this provides a heartbeat on pin 9, so you can tell the software is running.
 
@@ -173,9 +170,9 @@ uint8_t getch()
 
 void fill(uint8_t n)
 {
-	for (uint8_t x = 0; x < n; x++)
+	for (uint8_t i = 0; i < n; i++)
 	{
-		buff[x] = getch();
+		buff[i] = getch();
 	}
 }
 
@@ -190,7 +187,7 @@ void pulse(uint8_t pin, uint8_t times)
 	}
 }
 
-uint8_t spi_transaction(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
+uint8_t spiTrans(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
 	SPI.transfer(a);
 	SPI.transfer(b);
@@ -198,9 +195,9 @@ uint8_t spi_transaction(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 	return SPI.transfer(d);
 }
 
-uint8_t spi_transaction(uint8_t a, uint16_t b, uint8_t c)
+uint8_t spiTrans(uint8_t a, uint16_t b, uint8_t c)
 {
-	return spi_transaction(a, highByte(b), lowByte(b), c);
+	return spiTrans(a, highByte(b), lowByte(b), c);
 }
 
 void replyVersion(uint8_t c)
@@ -256,7 +253,7 @@ void beginProgram()
 	digitalWrite(SCK, LOW);
 	delay(20);
 	digitalWrite(RESET, LOW);
-	spi_transaction(0xAC, 0x53, 0x00, 0x00);
+	spiTrans(0xAC, 0x53, 0x00, 0x00);
 	inProgramming = true;
 }
 
@@ -273,20 +270,20 @@ void universal()
 	uint8_t ch;
 
 	fill(4);
-	ch = spi_transaction(buff[0], buff[1], buff[2], buff[3]);
+	ch = spiTrans(buff[0], buff[1], buff[2], buff[3]);
 	reply(true, ch);
 }
 
 void flash(uint8_t hilo, uint16_t addr, uint8_t data)
 {
-	spi_transaction(0x40 + 0x08 * hilo, addr, data);
+	spiTrans(0x40 + 0x08 * hilo, addr, data);
 }
 
 void writeFlashPageID(uint16_t addr)
 {
 	digitalWrite(LED_IN_PROGRAME, LOW);
 
-	spi_transaction(0x4C, addr, 0);
+	spiTrans(0x4C, addr, 0);
 
 	digitalWrite(LED_IN_PROGRAME, HIGH);
 }
@@ -317,18 +314,19 @@ uint16_t getPage(uint16_t addr)
 
 uint8_t writeFlashPage(uint16_t address, uint16_t length)
 {
-	uint16_t x = 0;
+	fill(length);
+
 	uint16_t page = getPage(address);
 
-	while (x < length)
+	for (uint16_t i = 0; i < length;)
 	{
 		if (page != getPage(address))
 		{
 			writeFlashPageID(page);
 			page = getPage(address);
 		}
-		flash(LOW, address, buff[x++]);
-		flash(HIGH, address, buff[x++]);
+		flash(LOW, address, buff[i++]);
+		flash(HIGH, address, buff[i++]);
 		address++;
 	}
 
@@ -350,9 +348,9 @@ uint8_t writeEeprom(uint16_t address, uint16_t length)
 	fill(length);
 
 	digitalWrite(LED_IN_PROGRAME, LOW);
-	for (uint16_t x = 0, addr = address << 1; x < length; x++)
+	for (uint16_t i = 0, addr = address << 1; i < length; i++)
 	{
-		spi_transaction(0xC0, addr + x, buff[x]);
+		spiTrans(0xC0, addr++, buff[i]);
 		delay(8);
 	}
 	digitalWrite(LED_IN_PROGRAME, HIGH);
@@ -367,7 +365,6 @@ void programPage(uint16_t address)
 
 	if (mem_type == 'F')
 	{
-		fill(length);
 		reply(true, writeFlashPage(address, length), false);
 		return;
 	}
@@ -382,12 +379,12 @@ void programPage(uint16_t address)
 
 uint8_t readFlash(uint8_t hilo, uint16_t addr)
 {
-	return spi_transaction(0x20 + hilo * 0x08, addr, 0);
+	return spiTrans(0x20 + hilo * 0x08, addr, 0);
 }
 
-char readFlashPage(uint16_t address, uint16_t length)
+uint8_t readFlashPage(uint16_t address, uint16_t length)
 {
-	for (uint16_t x = 0; x < length; x += 2)
+	for (uint16_t i = 0; i < length; i += 2)
 	{
 		uint8_t low = readFlash(LOW, address);
 		Serial.write(low);
@@ -401,11 +398,9 @@ char readFlashPage(uint16_t address, uint16_t length)
 char readEepromPage(uint16_t address, uint16_t length)
 {
 	// here again we have a word address
-	uint16_t start = address * 2;
-	for (uint16_t x = 0; x < length; x++)
+	for (uint16_t x = 0, addr = address << 1; x < length; x++)
 	{
-		uint16_t addr = start + x;
-		uint8_t ee = spi_transaction(0xA0, addr, 0x00);
+		uint8_t ee = spiTrans(0xA0, addr++, 0x00);
 		Serial.write(ee);
 	}
 	return STK_OK;
@@ -426,10 +421,15 @@ void readPage(uint16_t address)
 
 	Serial.write(STK_INSYNC);
 
-	if (memtype == 'F')
+	switch (memtype)
+	{
+	case 'F':
 		result = readFlashPage(address, length);
-	if (memtype == 'E')
+		break;
+	case 'E':
 		result = readEepromPage(address, length);
+		break;
+	}
 
 	Serial.write(result);
 }
@@ -444,11 +444,11 @@ void readSignature()
 	}
 
 	Serial.write(STK_INSYNC);
-	uint8_t high = spi_transaction(0x30, 0x00, 0x00, 0x00);
+	uint8_t high = spiTrans(0x30, 0x00, 0x00, 0x00);
 	Serial.write(high);
-	uint8_t middle = spi_transaction(0x30, 0x00, 0x01, 0x00);
+	uint8_t middle = spiTrans(0x30, 0x00, 0x01, 0x00);
 	Serial.write(middle);
-	uint8_t low = spi_transaction(0x30, 0x00, 0x02, 0x00);
+	uint8_t low = spiTrans(0x30, 0x00, 0x02, 0x00);
 	Serial.write(low);
 	Serial.write(STK_OK);
 }
@@ -467,19 +467,19 @@ void avrisp()
 		error = false;
 		reply();
 		break;
-	case '1':
-		if (getch() == CRC_EOP)
-		{
-			Serial.write(STK_INSYNC);
-			Serial.print("AVR ISP");
-			Serial.write(STK_OK);
-		}
-		else
-		{
-			error = true;
-			Serial.write(STK_NOSYNC);
-		}
-		break;
+//	case '1':
+//		if (getch() == CRC_EOP)
+//		{
+//			Serial.write(STK_INSYNC);
+//			Serial.print("AVR ISP");
+//			Serial.write(STK_OK);
+//		}
+//		else
+//		{
+//			error = true;
+//			Serial.write(STK_NOSYNC);
+//		}
+//		break;
 	case 'A':
 		replyVersion(getch());
 		break;
