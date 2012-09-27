@@ -54,7 +54,6 @@
 #define LED_HB    9
 #define LED_ERR   8
 #define LED_PMODE 7
-#define PROG_FLICKER true
 
 #define HWVER 2
 #define SWMAJ 1
@@ -78,8 +77,8 @@ void avrisp();
 void reply(void);
 void reply(uint8_t b);
 
-uint8_t write_eeprom_chunk(uint16_t start, uint16_t length);
-uint8_t write_flash_pages(uint16_t length);
+uint8_t writeEepromChunk(uint16_t start, uint16_t length);
+uint8_t writeFlashPage(uint16_t length);
 
 void setup()
 {
@@ -97,12 +96,10 @@ void setup()
 }
 
 uint8_t error = 0;
-uint8_t pmode = 0;
+uint8_t inProgramming = 0;
 // address for reading and writing, set by 'U' command
 uint16_t here;
 uint8_t buff[256]; // global block storage
-
-#define beget16(addr) (makeWord(*addr, *(addr+1)))
 
 typedef struct param
 {
@@ -135,7 +132,7 @@ void heartbeat()
 void loop(void)
 {
 	// is pmode active?
-	digitalWrite(LED_PMODE, pmode);
+	digitalWrite(LED_PMODE, inProgramming);
 	// is there an error?
 	digitalWrite(LED_ERR, error);
 
@@ -173,18 +170,17 @@ void pulse(uint8_t pin, uint8_t times)
 	}
 }
 
-void prog_lamp(bool state)
-{
-	if (PROG_FLICKER)
-		digitalWrite(LED_PMODE, state);
-}
-
 uint8_t spi_transaction(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 {
 	SPI.transfer(a);
 	SPI.transfer(b);
 	SPI.transfer(c);
 	return SPI.transfer(d);
+}
+
+uint8_t spi_transaction(uint8_t a, uint16_t b, uint8_t c)
+{
+	return spi_transaction(a, highByte(b), lowByte(b), c);
 }
 
 void reply(void)
@@ -197,7 +193,6 @@ void reply(void)
 	else
 	{
 		error = true;
-		;
 		Serial.write(STK_NOSYNC);
 	}
 }
@@ -213,7 +208,6 @@ void reply(uint8_t b)
 	else
 	{
 		error = true;
-		;
 		Serial.write(STK_NOSYNC);
 	}
 }
@@ -254,16 +248,16 @@ void set_parameters()
 	param.flash_poll = buff[8];
 	// ignore buff[9] (= buff[8])
 	// following are 16 bits (big endian)
-	param.eeprom_poll = beget16(&buff[10]);
-	param.page_size = beget16(&buff[12]);
-	param.eeprom_size = beget16(&buff[14]);
+	param.eeprom_poll = makeWord(buff[10], buff[11]);
+	param.page_size = makeWord(buff[12], buff[13]);
+	param.eeprom_size = makeWord(buff[14], buff[15]);
 
 	// 32 bits flashsize (big endian)
 	param.flash_size = buff[16] * 0x01000000UL + buff[17] * 0x00010000UL
 			+ buff[18] * 0x00000100UL + buff[19];
 }
 
-void start_pmode()
+void startProgram()
 {
 	SPI.begin();
 	digitalWrite(RESET, HIGH);
@@ -272,15 +266,15 @@ void start_pmode()
 	delay(20);
 	digitalWrite(RESET, LOW);
 	spi_transaction(0xAC, 0x53, 0x00, 0x00);
-	pmode = true;
+	inProgramming = true;
 }
 
-void end_pmode()
+void endProgram()
 {
 	SPI.end();
 	digitalWrite(RESET, HIGH);
 	pinMode(RESET, INPUT);
-	pmode = false;
+	inProgramming = false;
 }
 
 void universal()
@@ -294,16 +288,16 @@ void universal()
 
 void flash(uint8_t hilo, uint16_t addr, uint8_t data)
 {
-	spi_transaction(0x40 + 0x08 * hilo, highByte(addr), lowByte(addr), data);
+	spi_transaction(0x40 + 0x08 * hilo, addr, data);
 }
 
 void writeFlashPageID(uint16_t addr)
 {
-	prog_lamp (LOW);
+	digitalWrite(LED_PMODE, LOW);
 
-	spi_transaction(0x4C, highByte(addr), lowByte(addr), 0);
+	spi_transaction(0x4C, addr, 0);
 
-	prog_lamp (HIGH);
+	digitalWrite(LED_PMODE, HIGH);
 }
 
 //#define _current_page(x) (here & 0xFFFFE0)
@@ -330,13 +324,13 @@ uint16_t current_page(uint16_t addr)
 	return page;
 }
 
-void write_flash(uint16_t length)
+void writeFlash(uint16_t length)
 {
 	fill(length);
 	if (getch() == CRC_EOP)
 	{
 		Serial.write(STK_INSYNC);
-		Serial.write(write_flash_pages(length));
+		Serial.write(writeFlashPage(length));
 	}
 	else
 	{
@@ -345,7 +339,7 @@ void write_flash(uint16_t length)
 	}
 }
 
-uint8_t write_flash_pages(uint16_t length)
+uint8_t writeFlashPage(uint16_t length)
 {
 	uint16_t x = 0;
 	uint16_t page = current_page(here);
@@ -367,7 +361,7 @@ uint8_t write_flash_pages(uint16_t length)
 	return STK_OK;
 }
 
-uint8_t write_eeprom(uint16_t length)
+uint8_t writeEeprom(uint16_t length)
 {
 	// here is a word address, get the byte address
 	uint16_t start = here * 2;
@@ -379,27 +373,27 @@ uint8_t write_eeprom(uint16_t length)
 	}
 	while (remaining > EECHUNK)
 	{
-		write_eeprom_chunk(start, EECHUNK);
+		writeEepromChunk(start, EECHUNK);
 		start += EECHUNK;
 		remaining -= EECHUNK;
 	}
-	write_eeprom_chunk(start, remaining);
+	writeEepromChunk(start, remaining);
 	return STK_OK;
 }
 // write (length) bytes, (start) is a byte address
-uint8_t write_eeprom_chunk(uint16_t start, uint16_t length)
+uint8_t writeEepromChunk(uint16_t start, uint16_t length)
 {
 	// this writes byte-by-byte,
 	// page writing may be faster (4 bytes at a time)
 	fill(length);
-	prog_lamp (LOW);
+	digitalWrite(LED_PMODE, LOW);
 	for (uint16_t x = 0; x < length; x++)
 	{
 		uint16_t addr = start + x;
-		spi_transaction(0xC0, highByte(addr), lowByte(addr), buff[x]);
+		spi_transaction(0xC0, addr, buff[x]);
 		delay(45);
 	}
-	prog_lamp (HIGH);
+	digitalWrite(LED_PMODE, HIGH);
 	return STK_OK;
 }
 
@@ -411,12 +405,12 @@ void program_page()
 	// flash memory @here, (length) bytes
 	if (memtype == 'F')
 	{
-		write_flash(length);
+		writeFlash(length);
 		return;
 	}
 	if (memtype == 'E')
 	{
-		result = write_eeprom(length);
+		result = writeEeprom(length);
 		if (getch() == CRC_EOP)
 		{
 			Serial.write(STK_INSYNC);
@@ -435,7 +429,7 @@ void program_page()
 
 uint8_t flash_read(uint8_t hilo, uint16_t addr)
 {
-	return spi_transaction(0x20 + hilo * 0x08, highByte(addr), lowByte(addr), 0);
+	return spi_transaction(0x20 + hilo * 0x08, addr, 0);
 }
 
 char flash_read_page(uint16_t length)
@@ -458,7 +452,7 @@ char eeprom_read_page(uint16_t length)
 	for (uint16_t x = 0; x < length; x++)
 	{
 		uint16_t addr = start + x;
-		uint8_t ee = spi_transaction(0xA0, highByte(addr), lowByte(addr), 0x00);
+		uint8_t ee = spi_transaction(0xA0, addr, 0x00);
 		Serial.write(ee);
 	}
 	return STK_OK;
@@ -512,7 +506,6 @@ void read_signature()
 ////////////////////////////////////
 void avrisp()
 {
-	uint8_t data, low, high;
 	uint8_t ch = getch();
 	switch (ch)
 	{
@@ -546,21 +539,21 @@ void avrisp()
 		reply();
 		break;
 	case 'P':
-		pmode ? pulse(LED_ERR, 3) : start_pmode();
+		inProgramming ? pulse(LED_ERR, 3) : startProgram();
 		reply();
 		break;
 	case 'U': // set address (word)
 		here = getch();
-		here += 256 * getch();
+		here += getch() << 8;
 		reply();
 		break;
 	case 0x60: //STK_PROG_FLASH
-		low = getch();
-		high = getch();
+		getch();
+		getch();
 		reply();
 		break;
 	case 0x61: //STK_PROG_DATA
-		data = getch();
+		getch();
 		reply();
 		break;
 	case 0x64: //STK_PROG_PAGE
@@ -574,7 +567,7 @@ void avrisp()
 		break;
 	case 'Q': //0x51
 		error = false;
-		end_pmode();
+		endProgram();
 		reply();
 		break;
 	case 0x75: //STK_READ_SIGN 'u'
