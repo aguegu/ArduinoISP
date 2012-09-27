@@ -99,7 +99,7 @@ void setup()
 uint8_t error = 0;
 uint8_t pmode = 0;
 // address for reading and writing, set by 'U' command
-int here;
+uint16_t here;
 uint8_t buff[256]; // global block storage
 
 #define beget16(addr) (makeWord(*addr, *(addr+1)))
@@ -196,7 +196,8 @@ void reply(void)
 	}
 	else
 	{
-		error++;
+		error = true;
+		;
 		Serial.write(STK_NOSYNC);
 	}
 }
@@ -211,7 +212,8 @@ void reply(uint8_t b)
 	}
 	else
 	{
-		error++;
+		error = true;
+		;
 		Serial.write(STK_NOSYNC);
 	}
 }
@@ -295,7 +297,7 @@ void flash(uint8_t hilo, uint16_t addr, uint8_t data)
 	spi_transaction(0x40 + 0x08 * hilo, highByte(addr), lowByte(addr), data);
 }
 
-void commit(int addr)
+void commit(uint16_t addr)
 {
 	prog_lamp (LOW);
 
@@ -328,7 +330,7 @@ uint16_t current_page(uint16_t addr)
 	return page;
 }
 
-void write_flash(int length)
+void write_flash(uint16_t length)
 {
 	fill(length);
 	if (getch() == CRC_EOP)
@@ -338,7 +340,7 @@ void write_flash(int length)
 	}
 	else
 	{
-		error++;
+		error = true;
 		Serial.write(STK_NOSYNC);
 	}
 }
@@ -368,11 +370,11 @@ uint8_t write_flash_pages(uint16_t length)
 uint8_t write_eeprom(uint16_t length)
 {
 	// here is a word address, get the byte address
-	int start = here * 2;
-	int remaining = length;
+	uint16_t start = here * 2;
+	uint16_t remaining = length;
 	if (length > param.eeprom_size)
 	{
-		error++;
+		error = true;
 		return STK_FAILED;
 	}
 	while (remaining > EECHUNK)
