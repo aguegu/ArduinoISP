@@ -83,7 +83,7 @@ uint8_t write_flash_pages(uint16_t length);
 
 void setup()
 {
-	Serial.begin(19200);
+	Serial.begin(115200);
 	SPI.setDataMode(0);
 	SPI.setBitOrder(MSBFIRST);
 	// Clock Div can be 2,4,8,16,32,64, or 128
@@ -124,16 +124,12 @@ typedef struct param
 parameter param;
 
 // this provides a heartbeat on pin 9, so you can tell the software is running.
-uint8_t hbval = 128;
-int8_t hbdelta = 8;
 
 void heartbeat()
 {
-	if (hbval > 192 || hbval < 32)
-		hbdelta = -hbdelta;
-	hbval += hbdelta;
-	analogWrite(LED_HB, hbval);
-	delay(20);
+	static bool state;
+	analogWrite(LED_HB, state);
+	state = !state;
 }
 
 void loop(void)
@@ -158,9 +154,9 @@ uint8_t getch()
 	return Serial.read();
 }
 
-void fill(int n)
+void fill(uint8_t n)
 {
-	for (int x = 0; x < n; x++)
+	for (uint8_t x = 0; x < n; x++)
 	{
 		buff[x] = getch();
 	}
@@ -177,7 +173,7 @@ void pulse(uint8_t pin, uint8_t times)
 	}
 }
 
-void prog_lamp(int state)
+void prog_lamp(bool state)
 {
 	if (PROG_FLICKER)
 		digitalWrite(LED_PMODE, state);
@@ -301,16 +297,11 @@ void flash(uint8_t hilo, uint16_t addr, uint8_t data)
 
 void commit(int addr)
 {
-	if (PROG_FLICKER)
-		prog_lamp (LOW);
+	prog_lamp (LOW);
 
 	spi_transaction(0x4C, highByte(addr), lowByte(addr), 0);
 
-	if (PROG_FLICKER)
-	{
-		delay(PTIME);
-		prog_lamp (HIGH);
-	}
+	prog_lamp (HIGH);
 }
 
 //#define _current_page(x) (here & 0xFFFFE0)
@@ -431,7 +422,7 @@ void program_page()
 		}
 		else
 		{
-			error++;
+			error = true;
 			Serial.write(STK_NOSYNC);
 		}
 		return;
@@ -479,7 +470,7 @@ void read_page()
 
 	if (getch() != CRC_EOP)
 	{
-		error++;
+		error = true;
 		Serial.write(STK_NOSYNC);
 		return;
 	}
@@ -498,7 +489,7 @@ void read_signature()
 {
 	if (getch() != CRC_EOP)
 	{
-		error++;
+		error = true;
 		Serial.write(STK_NOSYNC);
 		return;
 	}
@@ -524,7 +515,7 @@ void avrisp()
 	switch (ch)
 	{
 	case '0': // signon
-		error = 0;
+		error = false;
 		reply();
 		break;
 	case '1':
@@ -536,7 +527,7 @@ void avrisp()
 		}
 		else
 		{
-			error++;
+			error = true;
 			Serial.write(STK_NOSYNC);
 		}
 		break;
@@ -580,7 +571,7 @@ void avrisp()
 		universal();
 		break;
 	case 'Q': //0x51
-		error = 0;
+		error = false;
 		end_pmode();
 		reply();
 		break;
@@ -590,12 +581,12 @@ void avrisp()
 		// expecting a command, not CRC_EOP
 		// this is how we can get back in sync
 	case CRC_EOP:
-		error++;
+		error = true;
 		Serial.write(STK_NOSYNC);
 		break;
 		// anything else we will return STK_UNKNOWN
 	default:
-		error++;
+		error = true;
 		Serial.write(getch() == CRC_EOP ? STK_UNKNOWN : STK_NOSYNC);
 		break;
 	}
