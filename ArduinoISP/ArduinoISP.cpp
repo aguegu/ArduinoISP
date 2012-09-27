@@ -273,7 +273,7 @@ void flash(uint8_t hilo, uint16_t addr, uint8_t data)
 	spiTrans(0x40 + 0x08 * hilo, addr, data);
 }
 
-void writeFlashPage(uint16_t addr)
+void commitFlashPage(uint16_t addr)
 {
 	spiTrans(0x4C, addr, 0);
 }
@@ -321,7 +321,7 @@ uint8_t writeFlash(uint16_t address, uint16_t length)
 		address++;
 	}
 
-	writeFlashPage(page);
+	commitFlashPage(page);
 
 	return STK_OK;
 }
@@ -342,7 +342,7 @@ uint8_t writeEeprom(uint16_t address, uint16_t length)
 	for (uint16_t i = length, addr = address << 1; i--;)
 	{
 		spiTrans(0xC0, addr++, *p++);
-		delay(8);
+		delay(4);
 	}
 
 	return STK_OK;
