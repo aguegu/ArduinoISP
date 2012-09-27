@@ -212,7 +212,7 @@ void reply(uint8_t b)
 	}
 }
 
-void get_version(uint8_t c)
+void replyVersion(uint8_t c)
 {
 	switch (c)
 	{
@@ -234,7 +234,7 @@ void get_version(uint8_t c)
 	}
 }
 
-void set_parameters()
+void setParameters()
 {
 	// call this after reading paramter packet into buff[]
 	param.device_signature = buff[0];
@@ -301,7 +301,7 @@ void writeFlashPageID(uint16_t addr)
 }
 
 //#define _current_page(x) (here & 0xFFFFE0)
-uint16_t current_page(uint16_t addr)
+uint16_t getPage(uint16_t addr)
 {
 	uint16_t page = addr;
 
@@ -342,14 +342,14 @@ void writeFlash(uint16_t length)
 uint8_t writeFlashPage(uint16_t length)
 {
 	uint16_t x = 0;
-	uint16_t page = current_page(here);
+	uint16_t page = getPage(here);
 
 	while (x < length)
 	{
-		if (page != current_page(here))
+		if (page != getPage(here))
 		{
 			writeFlashPageID(page);
-			page = current_page(here);
+			page = getPage(here);
 		}
 		flash(LOW, here, buff[x++]);
 		flash(HIGH, here, buff[x++]);
@@ -397,18 +397,18 @@ uint8_t writeEepromChunk(uint16_t start, uint16_t length)
 	return STK_OK;
 }
 
-void program_page()
+void programPage()
 {
 	uint8_t result = STK_FAILED;
 	uint16_t length = makeWord(getch(), getch());
-	uint8_t memtype = getch();
+	uint8_t mem_type = getch();
 	// flash memory @here, (length) bytes
-	if (memtype == 'F')
+	if (mem_type == 'F')
 	{
 		writeFlash(length);
 		return;
 	}
-	if (memtype == 'E')
+	if (mem_type == 'E')
 	{
 		result = writeEeprom(length);
 		if (getch() == CRC_EOP)
@@ -458,7 +458,7 @@ char eeprom_read_page(uint16_t length)
 	return STK_OK;
 }
 
-void read_page()
+void readPage()
 {
 	uint8_t result = STK_FAILED;
 	uint16_t length = makeWord(getch(), getch());
@@ -481,7 +481,7 @@ void read_page()
 	Serial.write(result);
 }
 
-void read_signature()
+void readSignature()
 {
 	if (getch() != CRC_EOP)
 	{
@@ -527,11 +527,11 @@ void avrisp()
 		}
 		break;
 	case 'A':
-		get_version(getch());
+		replyVersion(getch());
 		break;
 	case 'B':
 		fill(20);
-		set_parameters();
+		setParameters();
 		reply();
 		break;
 	case 'E': // extended parameters - ignore for now
@@ -557,10 +557,10 @@ void avrisp()
 		reply();
 		break;
 	case 0x64: //STK_PROG_PAGE
-		program_page();
+		programPage();
 		break;
 	case 0x74: //STK_READ_PAGE 't'
-		read_page();
+		readPage();
 		break;
 	case 'V': //0x56
 		universal();
@@ -571,7 +571,7 @@ void avrisp()
 		reply();
 		break;
 	case 0x75: //STK_READ_SIGN 'u'
-		read_signature();
+		readSignature();
 		break;
 		// expecting a command, not CRC_EOP
 		// this is how we can get back in sync
