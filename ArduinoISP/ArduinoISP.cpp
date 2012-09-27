@@ -426,6 +426,8 @@ void readPage(uint16_t address)
 
 void readSignature()
 {
+	uint8_t val;
+
 	if (getch() != CRC_EOP)
 	{
 		error = true;
@@ -435,10 +437,12 @@ void readSignature()
 
 	Serial.write(STK_INSYNC);
 
-	Serial.write(spiTrans(0x30, 0x00, 0x00, 0x00));
-	Serial.write(spiTrans(0x30, 0x01, 0x00, 0x00));
-	Serial.write(spiTrans(0x30, 0x02, 0x00, 0x00));
-
+	val = spiTrans(0x30, 0x00, 0x00, 0x00);
+	Serial.write(val);
+	val = spiTrans(0x30, 0x01, 0x00, 0x00);
+	Serial.write(val);
+	val = spiTrans(0x30, 0x02, 0x00, 0x00);
+	Serial.write(val);
 	Serial.write(STK_OK);
 }
 
