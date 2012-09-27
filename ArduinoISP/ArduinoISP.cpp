@@ -87,7 +87,7 @@ void setup()
 	SPI.setDataMode(0);
 	SPI.setBitOrder(MSBFIRST);
 	// Clock Div can be 2,4,8,16,32,64, or 128
-	SPI.setClockDivider(SPI_CLOCK_DIV128);
+	SPI.setClockDivider(SPI_CLOCK_DIV8);
 	pinMode(LED_PMODE, OUTPUT);
 	pulse(LED_PMODE, 2);
 	pinMode(LED_ERR, OUTPUT);
@@ -297,7 +297,7 @@ void flash(uint8_t hilo, uint16_t addr, uint8_t data)
 	spi_transaction(0x40 + 0x08 * hilo, highByte(addr), lowByte(addr), data);
 }
 
-void commit(uint16_t addr)
+void writeFlashPageID(uint16_t addr)
 {
 	prog_lamp (LOW);
 
@@ -354,7 +354,7 @@ uint8_t write_flash_pages(uint16_t length)
 	{
 		if (page != current_page(here))
 		{
-			commit(page);
+			writeFlashPageID(page);
 			page = current_page(here);
 		}
 		flash(LOW, here, buff[x++]);
@@ -362,7 +362,7 @@ uint8_t write_flash_pages(uint16_t length)
 		here++;
 	}
 
-	commit(page);
+	writeFlashPageID(page);
 
 	return STK_OK;
 }
