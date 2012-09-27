@@ -114,10 +114,6 @@ void setup()
 	pulse(LED_HEATBEAT, 2);
 }
 
-
-
-// this provides a heartbeat on pin 9, so you can tell the software is running.
-
 void reply(bool has_byte, byte val, bool send_ok)
 {
 	if (getch() == CRC_EOP)
@@ -170,9 +166,11 @@ uint8_t getch()
 
 void fill(uint8_t n)
 {
-	for (uint8_t i = 0; i < n; i++)
+	uint8_t i = n;
+	uint8_t *p = buff;
+	while (i--)
 	{
-		buff[i] = getch();
+		*p++ = getch();
 	}
 }
 
@@ -288,7 +286,6 @@ void writeFlashPageID(uint16_t addr)
 	digitalWrite(LED_IN_PROGRAME, HIGH);
 }
 
-//#define _current_page(x) (here & 0xFFFFE0)
 uint16_t getPage(uint16_t addr)
 {
 	uint16_t page = addr;
@@ -386,19 +383,19 @@ uint8_t readFlashPage(uint16_t address, uint16_t length)
 {
 	for (uint16_t i = 0; i < length; i += 2)
 	{
-		uint8_t low = readFlash(LOW, address);
-		Serial.write(low);
-		uint8_t high = readFlash(HIGH, address);
-		Serial.write(high);
+		uint8_t val = readFlash(LOW, address);
+		Serial.write(val);
+		val = readFlash(HIGH, address);
+		Serial.write(val);
 		address++;
 	}
 	return STK_OK;
 }
 
-char readEepromPage(uint16_t address, uint16_t length)
+uint8_t readEepromPage(uint16_t address, uint16_t length)
 {
 	// here again we have a word address
-	for (uint16_t x = 0, addr = address << 1; x < length; x++)
+	for (uint16_t i = length, addr = address << 1; i--;)
 	{
 		uint8_t ee = spiTrans(0xA0, addr++, 0x00);
 		Serial.write(ee);
@@ -444,12 +441,11 @@ void readSignature()
 	}
 
 	Serial.write(STK_INSYNC);
-	uint8_t high = spiTrans(0x30, 0x00, 0x00, 0x00);
-	Serial.write(high);
-	uint8_t middle = spiTrans(0x30, 0x00, 0x01, 0x00);
-	Serial.write(middle);
-	uint8_t low = spiTrans(0x30, 0x00, 0x02, 0x00);
-	Serial.write(low);
+
+	Serial.write(spiTrans(0x30, 0x00, 0x00, 0x00));
+	Serial.write(spiTrans(0x30, 0x01, 0x00, 0x00));
+	Serial.write(spiTrans(0x30, 0x02, 0x00, 0x00));
+
 	Serial.write(STK_OK);
 }
 //////////////////////////////////////////
