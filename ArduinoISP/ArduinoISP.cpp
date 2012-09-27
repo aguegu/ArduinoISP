@@ -68,16 +68,14 @@
 #define CRC_EOP     0x20 //ok it is a space...
 #define PTIME 30
 
-#define EECHUNK (32)
-
 void pulse(uint8_t pin, uint8_t times);
 void avrisp();
 void reply(bool has_byte = false, byte val = 0x00, bool send_ok = true);
 uint8_t getch();
 
-uint8_t error = false;
-uint8_t inProgramming = false;
-uint8_t buff[256]; // global block storage
+static uint8_t error = false;
+static uint8_t inProgramming = false;
+static uint8_t buff[256]; // global block storage
 
 typedef struct param
 {
@@ -96,7 +94,7 @@ typedef struct param
 	uint32_t flash_size;
 } parameter;
 
-parameter param;
+static parameter param;
 
 void setup()
 {
@@ -265,11 +263,9 @@ void endProgram()
 
 void universal()
 {
-	uint8_t ch;
-
 	fill(4);
-	ch = spiTrans(buff[0], buff[1], buff[2], buff[3]);
-	reply(true, ch);
+	uint8_t val = spiTrans(buff[0], buff[1], buff[2], buff[3]);
+	reply(true, val);
 }
 
 void flash(uint8_t hilo, uint16_t addr, uint8_t data)
@@ -277,13 +273,9 @@ void flash(uint8_t hilo, uint16_t addr, uint8_t data)
 	spiTrans(0x40 + 0x08 * hilo, addr, data);
 }
 
-void writeFlashPageID(uint16_t addr)
+void writeFlashPage(uint16_t addr)
 {
-	digitalWrite(LED_IN_PROGRAME, LOW);
-
 	spiTrans(0x4C, addr, 0);
-
-	digitalWrite(LED_IN_PROGRAME, HIGH);
 }
 
 uint16_t getPage(uint16_t addr)
@@ -293,41 +285,43 @@ uint16_t getPage(uint16_t addr)
 	switch (param.page_size)
 	{
 	case 32:
-		page &= 0xFFFFFFF0;
+		page &= 0xFFF0;
 		break;
 	case 64:
-		page &= 0xFFFFFFE0;
+		page &= 0xFFE0;
 		break;
 	case 128:
-		page &= 0xFFFFFFC0;
+		page  &= 0xFFC0;
 		break;
 	case 256:
-		page &= 0xFFFFFF80;
+		page &= 0xFF80;
 		break;
 	}
 
 	return page;
 }
 
-uint8_t writeFlashPage(uint16_t address, uint16_t length)
+uint8_t writeFlash(uint16_t address, uint16_t length)
 {
+	if (length > param.page_size)
+	{
+		error = true;
+		return STK_FAILED;
+	}
+
 	fill(length);
 
 	uint16_t page = getPage(address);
 
-	for (uint16_t i = 0; i < length;)
+	uint8_t *p = buff;
+	for (uint16_t i = length >> 1; i--;)
 	{
-		if (page != getPage(address))
-		{
-			writeFlashPageID(page);
-			page = getPage(address);
-		}
-		flash(LOW, address, buff[i++]);
-		flash(HIGH, address, buff[i++]);
+		flash(LOW, address, *p++);
+		flash(HIGH, address, *p++);
 		address++;
 	}
 
-	writeFlashPageID(page);
+	writeFlashPage(page);
 
 	return STK_OK;
 }
@@ -344,34 +338,33 @@ uint8_t writeEeprom(uint16_t address, uint16_t length)
 
 	fill(length);
 
-	digitalWrite(LED_IN_PROGRAME, LOW);
-	for (uint16_t i = 0, addr = address << 1; i < length; i++)
+	uint8_t * p = buff;
+	for (uint16_t i = length, addr = address << 1; i--;)
 	{
-		spiTrans(0xC0, addr++, buff[i]);
+		spiTrans(0xC0, addr++, *p++);
 		delay(8);
 	}
-	digitalWrite(LED_IN_PROGRAME, HIGH);
 
 	return STK_OK;
 }
 
-void programPage(uint16_t address)
+void writePage(uint16_t address)
 {
 	uint16_t length = makeWord(getch(), getch());
 	uint8_t mem_type = getch();
 
-	if (mem_type == 'F')
+	switch (mem_type)
 	{
-		reply(true, writeFlashPage(address, length), false);
-		return;
-	}
-	if (mem_type == 'E')
-	{
+	case 'F':
+		reply(true, writeFlash(address, length), false);
+		break;
+	case 'E':
 		reply(true, writeEeprom(address, length), false);
-		return;
+		break;
+	default:
+		Serial.write(STK_FAILED);
+		break;
 	}
-
-	Serial.write(STK_FAILED);
 }
 
 uint8_t readFlash(uint8_t hilo, uint16_t addr)
@@ -381,7 +374,7 @@ uint8_t readFlash(uint8_t hilo, uint16_t addr)
 
 uint8_t readFlashPage(uint16_t address, uint16_t length)
 {
-	for (uint16_t i = 0; i < length; i += 2)
+	for (uint16_t i = length >> 1; i--;)
 	{
 		uint8_t val = readFlash(LOW, address);
 		Serial.write(val);
@@ -448,15 +441,12 @@ void readSignature()
 
 	Serial.write(STK_OK);
 }
-//////////////////////////////////////////
-//////////////////////////////////////////
 
-////////////////////////////////////
-////////////////////////////////////
 void avrisp()
 {
-	uint8_t ch = getch();
 	static uint16_t address = 0;
+	uint8_t ch = getch();
+
 	switch (ch)
 	{
 	case '0': // signon
@@ -507,7 +497,7 @@ void avrisp()
 		reply();
 		break;
 	case 0x64: //STK_PROG_PAGE
-		programPage(address);
+		writePage(address);
 		break;
 	case 0x74: //STK_READ_PAGE 't'
 		readPage(address);
