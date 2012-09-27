@@ -87,7 +87,7 @@ void setup()
 	SPI.setDataMode(0);
 	SPI.setBitOrder(MSBFIRST);
 	// Clock Div can be 2,4,8,16,32,64, or 128
-	SPI.setClockDivider(SPI_CLOCK_DIV128);
+	SPI.setClockDivider(SPI_CLOCK_DIV64);
 	pinMode(LED_PMODE, OUTPUT);
 	pulse(LED_PMODE, 2);
 	pinMode(LED_ERR, OUTPUT);
