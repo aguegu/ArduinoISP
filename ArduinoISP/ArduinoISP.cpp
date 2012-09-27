@@ -78,7 +78,12 @@ void reply(void);
 void reply(uint8_t b);
 
 uint8_t writeEepromChunk(uint16_t start, uint16_t length);
-uint8_t writeFlashPage(uint16_t length);
+uint8_t writeFlashPage(uint16_t address, uint16_t length);
+
+uint8_t error = false;
+uint8_t inProgramming = false;
+// address for reading and writing, set by 'U' command
+uint8_t buff[256]; // global block storage
 
 void setup()
 {
@@ -94,12 +99,6 @@ void setup()
 	pinMode(LED_HB, OUTPUT);
 	pulse(LED_HB, 2);
 }
-
-uint8_t error = 0;
-uint8_t inProgramming = 0;
-// address for reading and writing, set by 'U' command
-uint16_t here;
-uint8_t buff[256]; // global block storage
 
 typedef struct param
 {
@@ -125,8 +124,14 @@ parameter param;
 void heartbeat()
 {
 	static bool state;
-	analogWrite(LED_HB, state);
-	state = !state;
+	static uint16_t timer = 0;
+	if (timer == 0x4000)
+	{
+		digitalWrite(LED_HB, state);
+		state = !state;
+		timer = 0;
+	}
+	timer++;
 }
 
 void loop(void)
@@ -257,7 +262,7 @@ void setParameters()
 			+ buff[18] * 0x00000100UL + buff[19];
 }
 
-void startProgram()
+void beginProgram()
 {
 	SPI.begin();
 	digitalWrite(RESET, HIGH);
@@ -324,13 +329,13 @@ uint16_t getPage(uint16_t addr)
 	return page;
 }
 
-void writeFlash(uint16_t length)
+void writeFlash(uint16_t address, uint16_t length)
 {
 	fill(length);
 	if (getch() == CRC_EOP)
 	{
 		Serial.write(STK_INSYNC);
-		Serial.write(writeFlashPage(length));
+		Serial.write(writeFlashPage(address, length));
 	}
 	else
 	{
@@ -339,21 +344,21 @@ void writeFlash(uint16_t length)
 	}
 }
 
-uint8_t writeFlashPage(uint16_t length)
+uint8_t writeFlashPage(uint16_t address, uint16_t length)
 {
 	uint16_t x = 0;
-	uint16_t page = getPage(here);
+	uint16_t page = getPage(address);
 
 	while (x < length)
 	{
-		if (page != getPage(here))
+		if (page != getPage(address))
 		{
 			writeFlashPageID(page);
-			page = getPage(here);
+			page = getPage(address);
 		}
-		flash(LOW, here, buff[x++]);
-		flash(HIGH, here, buff[x++]);
-		here++;
+		flash(LOW, address, buff[x++]);
+		flash(HIGH, address, buff[x++]);
+		address++;
 	}
 
 	writeFlashPageID(page);
@@ -361,10 +366,10 @@ uint8_t writeFlashPage(uint16_t length)
 	return STK_OK;
 }
 
-uint8_t writeEeprom(uint16_t length)
+uint8_t writeEeprom(uint16_t address, uint16_t length)
 {
 	// here is a word address, get the byte address
-	uint16_t start = here * 2;
+	uint16_t start = address * 2;
 	uint16_t remaining = length;
 	if (length > param.eeprom_size)
 	{
@@ -397,7 +402,7 @@ uint8_t writeEepromChunk(uint16_t start, uint16_t length)
 	return STK_OK;
 }
 
-void programPage()
+void programPage(uint16_t address)
 {
 	uint8_t result = STK_FAILED;
 	uint16_t length = makeWord(getch(), getch());
@@ -405,12 +410,12 @@ void programPage()
 	// flash memory @here, (length) bytes
 	if (mem_type == 'F')
 	{
-		writeFlash(length);
+		writeFlash(address, length);
 		return;
 	}
 	if (mem_type == 'E')
 	{
-		result = writeEeprom(length);
+		result = writeEeprom(address, length);
 		if (getch() == CRC_EOP)
 		{
 			Serial.write(STK_INSYNC);
@@ -427,28 +432,28 @@ void programPage()
 	Serial.write(STK_FAILED);
 }
 
-uint8_t flash_read(uint8_t hilo, uint16_t addr)
+uint8_t readFlash(uint8_t hilo, uint16_t addr)
 {
 	return spi_transaction(0x20 + hilo * 0x08, addr, 0);
 }
 
-char flash_read_page(uint16_t length)
+char readFlashPage(uint16_t address, uint16_t length)
 {
 	for (uint16_t x = 0; x < length; x += 2)
 	{
-		uint8_t low = flash_read(LOW, here);
+		uint8_t low = readFlash(LOW, address);
 		Serial.write(low);
-		uint8_t high = flash_read(HIGH, here);
+		uint8_t high = readFlash(HIGH, address);
 		Serial.write(high);
-		here++;
+		address++;
 	}
 	return STK_OK;
 }
 
-char eeprom_read_page(uint16_t length)
+char readEepromPage(uint16_t address, uint16_t length)
 {
 	// here again we have a word address
-	uint16_t start = here * 2;
+	uint16_t start = address * 2;
 	for (uint16_t x = 0; x < length; x++)
 	{
 		uint16_t addr = start + x;
@@ -458,7 +463,7 @@ char eeprom_read_page(uint16_t length)
 	return STK_OK;
 }
 
-void readPage()
+void readPage(uint16_t address)
 {
 	uint8_t result = STK_FAILED;
 	uint16_t length = makeWord(getch(), getch());
@@ -474,9 +479,9 @@ void readPage()
 	Serial.write(STK_INSYNC);
 
 	if (memtype == 'F')
-		result = flash_read_page(length);
+		result = readFlashPage(address, length);
 	if (memtype == 'E')
-		result = eeprom_read_page(length);
+		result = readEepromPage(address, length);
 
 	Serial.write(result);
 }
@@ -507,6 +512,7 @@ void readSignature()
 void avrisp()
 {
 	uint8_t ch = getch();
+	static uint16_t address = 0;
 	switch (ch)
 	{
 	case '0': // signon
@@ -539,12 +545,12 @@ void avrisp()
 		reply();
 		break;
 	case 'P':
-		inProgramming ? pulse(LED_ERR, 3) : startProgram();
+		inProgramming ? pulse(LED_ERR, 3) : beginProgram();
 		reply();
 		break;
 	case 'U': // set address (word)
-		here = getch();
-		here += getch() << 8;
+		address = getch();
+		address += getch() << 8;
 		reply();
 		break;
 	case 0x60: //STK_PROG_FLASH
@@ -557,10 +563,10 @@ void avrisp()
 		reply();
 		break;
 	case 0x64: //STK_PROG_PAGE
-		programPage();
+		programPage(address);
 		break;
 	case 0x74: //STK_READ_PAGE 't'
-		readPage();
+		readPage(address);
 		break;
 	case 'V': //0x56
 		universal();
