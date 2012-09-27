@@ -51,9 +51,9 @@
 
 #define RESET     SS
 
-#define LED_HB    9
-#define LED_ERR   8
-#define LED_PMODE 7
+#define LED_HEATBEAT    9
+#define LED_ERROR   	8
+#define LED_IN_PROGRAME 7
 
 #define HWVER 2
 #define SWMAJ 1
@@ -74,10 +74,9 @@ void pulse(uint8_t pin, uint8_t times);
 
 void avrisp();
 
-void reply(void);
-void reply(uint8_t b);
+void reply(bool has_byte = false, byte val = 0x00, bool send_ok = true);
+uint8_t getch();
 
-uint8_t writeEepromChunk(uint16_t start, uint16_t length);
 uint8_t writeFlashPage(uint16_t address, uint16_t length);
 
 uint8_t error = false;
@@ -92,12 +91,13 @@ void setup()
 	SPI.setBitOrder(MSBFIRST);
 	// Clock Div can be 2,4,8,16,32,64, or 128
 	SPI.setClockDivider(SPI_CLOCK_DIV64);
-	pinMode(LED_PMODE, OUTPUT);
-	pulse(LED_PMODE, 2);
-	pinMode(LED_ERR, OUTPUT);
-	pulse(LED_ERR, 2);
-	pinMode(LED_HB, OUTPUT);
-	pulse(LED_HB, 2);
+
+	pinMode(LED_IN_PROGRAME, OUTPUT);
+	pulse(LED_IN_PROGRAME, 2);
+	pinMode(LED_ERROR, OUTPUT);
+	pulse(LED_ERROR, 2);
+	pinMode(LED_HEATBEAT, OUTPUT);
+	pulse(LED_HEATBEAT, 2);
 }
 
 typedef struct param
@@ -121,13 +121,32 @@ parameter param;
 
 // this provides a heartbeat on pin 9, so you can tell the software is running.
 
+void reply(bool has_byte, byte val, bool send_ok)
+{
+	if (getch() == CRC_EOP)
+	{
+		Serial.write(STK_INSYNC);
+
+		if (has_byte)
+			Serial.write(val);
+
+		if (send_ok)
+			Serial.write(STK_OK);
+	}
+	else
+	{
+		error = true;
+		Serial.write(STK_NOSYNC);
+	}
+}
+
 void heartbeat()
 {
 	static bool state;
 	static uint16_t timer = 0;
 	if (timer == 0x4000)
 	{
-		digitalWrite(LED_HB, state);
+		digitalWrite(LED_HEATBEAT, state);
 		state = !state;
 		timer = 0;
 	}
@@ -136,17 +155,13 @@ void heartbeat()
 
 void loop(void)
 {
-	// is pmode active?
-	digitalWrite(LED_PMODE, inProgramming);
-	// is there an error?
-	digitalWrite(LED_ERR, error);
+	digitalWrite(LED_IN_PROGRAME, inProgramming);
+	digitalWrite(LED_ERROR, error);
 
-	// light the heartbeat LED
 	heartbeat();
+
 	if (Serial.available())
-	{
 		avrisp();
-	}
 }
 
 uint8_t getch()
@@ -188,53 +203,24 @@ uint8_t spi_transaction(uint8_t a, uint16_t b, uint8_t c)
 	return spi_transaction(a, highByte(b), lowByte(b), c);
 }
 
-void reply(void)
-{
-	if (getch() == CRC_EOP)
-	{
-		Serial.write(STK_INSYNC);
-		Serial.write(STK_OK);
-	}
-	else
-	{
-		error = true;
-		Serial.write(STK_NOSYNC);
-	}
-}
-
-void reply(uint8_t b)
-{
-	if (getch() == CRC_EOP)
-	{
-		Serial.write(STK_INSYNC);
-		Serial.write(b);
-		Serial.write(STK_OK);
-	}
-	else
-	{
-		error = true;
-		Serial.write(STK_NOSYNC);
-	}
-}
-
 void replyVersion(uint8_t c)
 {
 	switch (c)
 	{
 	case 0x80:
-		reply(HWVER);
+		reply(true, HWVER);
 		break;
 	case 0x81:
-		reply(SWMAJ);
+		reply(true, SWMAJ);
 		break;
 	case 0x82:
-		reply(SWMIN);
+		reply(true, SWMIN);
 		break;
 	case 0x93:
-		reply('S'); // serial programmer
+		reply(true, 'S'); // serial programmer
 		break;
 	default:
-		reply(0);
+		reply(true, 0);
 		break;
 	}
 }
@@ -288,7 +274,7 @@ void universal()
 
 	fill(4);
 	ch = spi_transaction(buff[0], buff[1], buff[2], buff[3]);
-	reply(ch);
+	reply(true, ch);
 }
 
 void flash(uint8_t hilo, uint16_t addr, uint8_t data)
@@ -298,11 +284,11 @@ void flash(uint8_t hilo, uint16_t addr, uint8_t data)
 
 void writeFlashPageID(uint16_t addr)
 {
-	digitalWrite(LED_PMODE, LOW);
+	digitalWrite(LED_IN_PROGRAME, LOW);
 
 	spi_transaction(0x4C, addr, 0);
 
-	digitalWrite(LED_PMODE, HIGH);
+	digitalWrite(LED_IN_PROGRAME, HIGH);
 }
 
 //#define _current_page(x) (here & 0xFFFFE0)
@@ -327,21 +313,6 @@ uint16_t getPage(uint16_t addr)
 	}
 
 	return page;
-}
-
-void writeFlash(uint16_t address, uint16_t length)
-{
-	fill(length);
-	if (getch() == CRC_EOP)
-	{
-		Serial.write(STK_INSYNC);
-		Serial.write(writeFlashPage(address, length));
-	}
-	else
-	{
-		error = true;
-		Serial.write(STK_NOSYNC);
-	}
 }
 
 uint8_t writeFlashPage(uint16_t address, uint16_t length)
@@ -369,63 +340,40 @@ uint8_t writeFlashPage(uint16_t address, uint16_t length)
 uint8_t writeEeprom(uint16_t address, uint16_t length)
 {
 	// here is a word address, get the byte address
-	uint16_t start = address * 2;
-	uint16_t remaining = length;
+
 	if (length > param.eeprom_size)
 	{
 		error = true;
 		return STK_FAILED;
 	}
-	while (remaining > EECHUNK)
-	{
-		writeEepromChunk(start, EECHUNK);
-		start += EECHUNK;
-		remaining -= EECHUNK;
-	}
-	writeEepromChunk(start, remaining);
-	return STK_OK;
-}
-// write (length) bytes, (start) is a byte address
-uint8_t writeEepromChunk(uint16_t start, uint16_t length)
-{
-	// this writes byte-by-byte,
-	// page writing may be faster (4 bytes at a time)
+
 	fill(length);
-	digitalWrite(LED_PMODE, LOW);
-	for (uint16_t x = 0; x < length; x++)
+
+	digitalWrite(LED_IN_PROGRAME, LOW);
+	for (uint16_t x = 0, addr = address << 1; x < length; x++)
 	{
-		uint16_t addr = start + x;
-		spi_transaction(0xC0, addr, buff[x]);
-		delay(45);
+		spi_transaction(0xC0, addr + x, buff[x]);
+		delay(8);
 	}
-	digitalWrite(LED_PMODE, HIGH);
+	digitalWrite(LED_IN_PROGRAME, HIGH);
+
 	return STK_OK;
 }
 
 void programPage(uint16_t address)
 {
-	uint8_t result = STK_FAILED;
 	uint16_t length = makeWord(getch(), getch());
 	uint8_t mem_type = getch();
-	// flash memory @here, (length) bytes
+
 	if (mem_type == 'F')
 	{
-		writeFlash(address, length);
+		fill(length);
+		reply(true, writeFlashPage(address, length), false);
 		return;
 	}
 	if (mem_type == 'E')
 	{
-		result = writeEeprom(address, length);
-		if (getch() == CRC_EOP)
-		{
-			Serial.write(STK_INSYNC);
-			Serial.write(result);
-		}
-		else
-		{
-			error = true;
-			Serial.write(STK_NOSYNC);
-		}
+		reply(true, writeEeprom(address, length), false);
 		return;
 	}
 
@@ -545,7 +493,7 @@ void avrisp()
 		reply();
 		break;
 	case 'P':
-		inProgramming ? pulse(LED_ERR, 3) : beginProgram();
+		inProgramming ? pulse(LED_ERROR, 3) : beginProgram();
 		reply();
 		break;
 	case 'U': // set address (word)
