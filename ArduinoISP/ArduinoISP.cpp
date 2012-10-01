@@ -134,21 +134,21 @@ void reply(bool has_byte, byte val, bool send_ok)
 void heartbeat()
 {
 	static bool state;
-	static uint16_t timer = 0;
-	if (timer == 0x4000)
+	static uint16_t timer;
+	if (timer > 0x4000)
 	{
 		digitalWrite(LED_HEATBEAT, state);
 		state = !state;
 		timer = 0;
 	}
 	timer++;
+
+	digitalWrite(LED_IN_PROGRAME, inProgramming);
+	digitalWrite(LED_ERROR, error);
 }
 
 void loop(void)
 {
-	digitalWrite(LED_IN_PROGRAME, inProgramming);
-	digitalWrite(LED_ERROR, error);
-
 	heartbeat();
 
 	if (Serial.available())
