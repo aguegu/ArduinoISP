@@ -64,10 +64,11 @@
 #define STK_NOSYNC  0x15
 #define CRC_EOP     0x20
 
+#define BUFF_LENGTH 256
+
 static uint8_t _error = 0;
 static bool _programming = false;
-static uint16_t _address; // address for reading and writing, set by 'U' command
-uint8_t _buff[256]; // global block storage
+uint8_t _buff[BUFF_LENGTH]; // global block storage
 
 typedef struct param
 {
@@ -147,9 +148,9 @@ uint8_t getch()
 
 void fill(uint8_t n)
 {
-	for (uint8_t x = 0; x < n; x++)
+	for (uint8_t i = 0; i < n; i++)
 	{
-		_buff[x] = getch();
+		_buff[i] = getch();
 	}
 }
 
@@ -170,6 +171,11 @@ uint8_t spiTransfer(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
 	SPI.transfer(b);
 	SPI.transfer(c);
 	return SPI.transfer(d);
+}
+
+uint8_t spiTransfer(uint8_t a, uint16_t b, uint8_t c)
+{
+	return spiTransfer(a, highByte(b), lowByte(b), c);
 }
 
 void reply(bool has_byte, byte val, bool send_ok)
@@ -270,16 +276,6 @@ void universal()
 	reply(true, ch);
 }
 
-void flash(uint8_t hilo, uint16_t addr, uint8_t data)
-{
-	spiTransfer(0x40 + 8 * hilo, (addr >> 8) & 0xFF, addr & 0xFF, data);
-}
-
-void commit(uint16_t addr)
-{
-	spiTransfer(0x4C, (addr >> 8) & 0xFF, addr & 0xFF, 0);
-}
-
 uint16_t getPage(uint16_t addr)
 {
 	uint16_t page = addr;
@@ -303,161 +299,132 @@ uint16_t getPage(uint16_t addr)
 	return page;
 }
 
-uint8_t writeFlashPages(uint16_t length)
+void writeFlash(uint16_t address, uint16_t length)
 {
-	uint16_t x = 0;
-	word page = getPage(_address);
-	while (x < length)
+	if (length > _param.flash_pagesize || length > BUFF_LENGTH)
 	{
-		if (page != getPage(_address))
-		{
-			commit(page);
-			page = getPage(_address);
-		}
-		flash(LOW, _address, _buff[x++]);
-		flash(HIGH, _address, _buff[x++]);
-		_address++;
+		_error++;
+		Serial.write(STK_FAILED);
+		return;
 	}
 
-	commit(page);
-
-	return STK_OK;
-}
-
-void writeFlash(uint16_t length)
-{
 	fill(length);
-	if (CRC_EOP == getch())
+
+	if (getch() == CRC_EOP)
 	{
 		Serial.write(STK_INSYNC);
-		Serial.write(writeFlashPages(length));
+
+		uint8_t *p = _buff;
+		uint8_t word_length = length >> 1;
+		for (uint8_t i = 0; i < word_length; i++)
+		{
+			spiTransfer(0x40, i, *p++);
+			spiTransfer(0x48, i, *p++);
+		}
+		spiTransfer(0x4C, getPage(address), 0);
 	}
 	else
 	{
 		_error++;
 		Serial.write(STK_NOSYNC);
 	}
+
+	Serial.write(STK_OK);
 }
 
-// write (length) bytes, (start) is a byte address
-uint8_t writeEepromChunk(uint16_t start, uint16_t length)
+void writeEeprom(uint16_t address, uint16_t length)
 {
-	// this writes byte-by-byte,
-	// page writing may be faster (4 bytes at a time)
-	fill(length);
-
-	for (uint16_t x = 0; x < length; x++)
-	{
-		uint16_t addr = start + x;
-		spiTransfer(0xC0, (addr >> 8) & 0xFF, addr & 0xFF, _buff[x]);
-		delay(9);
-	}
-
-	return STK_OK;
-}
-
-#define EECHUNK (32)
-uint8_t writeEeprom(uint16_t length)
-{
-	// here is a word address, get the byte address
-	uint16_t start = _address * 2;
-	uint16_t remaining = length;
-	if (length > _param.eeprom_size)
+	if (length > _param.eeprom_size || length > BUFF_LENGTH)
 	{
 		_error++;
-		return STK_FAILED;
+		Serial.write(STK_FAILED);
+		return;
 	}
-	while (remaining > EECHUNK)
+
+	fill(length);
+
+	if (CRC_EOP == getch())
 	{
-		writeEepromChunk(start, EECHUNK);
-		start += EECHUNK;
-		remaining -= EECHUNK;
+		Serial.write(STK_INSYNC);
+
+		uint8_t * p = _buff;
+		for (uint16_t i = length, addr = address << 1; i--;)
+		{
+			spiTransfer(0xC0, addr++, *p++);
+			delay(4);
+		}
 	}
-	writeEepromChunk(start, remaining);
-	return STK_OK;
+	else
+	{
+		_error++;
+		Serial.write(STK_NOSYNC);
+	}
+	Serial.write(STK_OK);
 }
 
-void programPage()
+void programPage(uint16_t address)
 {
-	uint8_t result = STK_FAILED;
 	uint16_t length = 256 * getch();
 	length += getch();
+
 	uint8_t memtype = getch();
-	// flash memory @here, (length) bytes
+
 	if (memtype == 'F')
 	{
-		writeFlash(length);
+		writeFlash(address, length);
 		return;
 	}
 	if (memtype == 'E')
 	{
-		result = writeEeprom(length);
-		if (CRC_EOP == getch())
-		{
-			Serial.write(STK_INSYNC);
-			Serial.write(result);
-		}
-		else
-		{
-			_error++;
-			Serial.write(STK_NOSYNC);
-		}
+		writeEeprom(address, length);
 		return;
 	}
 	Serial.write(STK_FAILED);
-	return;
 }
 
-uint8_t readFlash(uint8_t hilo, uint16_t addr)
+uint8_t readFlashPage(uint16_t address, uint16_t length)
 {
-	return spiTransfer(0x20 + hilo * 8, (addr >> 8) & 0xFF, addr & 0xFF, 0);
-}
-
-uint8_t readFlashPage(uint16_t length)
-{
-	for (uint16_t x = 0; x < length; x += 2)
+	for (uint16_t i = 0; i < length; i += 2)
 	{
-		uint8_t low = readFlash(LOW, _address);
-		Serial.write(low);
-		uint8_t high = readFlash(HIGH, _address);
-		Serial.write(high);
-		_address++;
+		Serial.write(spiTransfer(0x20, address, 0));
+		Serial.write(spiTransfer(0x28, address, 0));
+		address++;
 	}
 	return STK_OK;
 }
 
-uint8_t readEepromPage(uint16_t length)
+uint8_t readEepromPage(uint16_t address, uint16_t length)
 {
 	// here again we have a word address
-	uint16_t start = _address * 2;
-	for (uint16_t x = 0; x < length; x++)
+	for (uint16_t addr = address * 2, i = 0; i < length; i++)
 	{
-		uint16_t addr = start + x;
-		uint8_t ee = spiTransfer(0xA0, (addr >> 8) & 0xFF, addr & 0xFF, 0xFF);
+		uint8_t ee = spiTransfer(0xA0, addr++, 0xFF);
 		Serial.write(ee);
 	}
 	return STK_OK;
 }
 
-void readPage()
+void readPage(uint16_t address)
 {
 	uint8_t result = STK_FAILED;
 	uint16_t length = 256 * getch();
 	length += getch();
 	uint8_t memtype = getch();
-	if (CRC_EOP != getch())
+
+	if (getch() == CRC_EOP)
+	{
+		Serial.write(STK_INSYNC);
+		if (memtype == 'F')
+			result = readFlashPage(address, length);
+		if (memtype == 'E')
+			result = readEepromPage(address, length);
+	}
+	else
 	{
 		_error++;
 		Serial.write(STK_NOSYNC);
-		return;
 	}
-	Serial.write(STK_INSYNC);
-	if (memtype == 'F')
-		result = readFlashPage(length);
-	if (memtype == 'E')
-		result = readEepromPage(length);
 	Serial.write(result);
-	return;
 }
 
 void readSignature()
@@ -480,6 +447,7 @@ void readSignature()
 
 void avrisp()
 {
+	static uint16_t address = 0;
 	uint8_t ch = getch();
 	switch (ch)
 	{
@@ -525,11 +493,10 @@ void avrisp()
 		reply(false);
 		break;
 	case 'U': // set address (word)
-		_address = getch();
-		_address += 256 * getch();
+		address = getch();
+		address += 256 * getch();
 		reply(false);
 		break;
-
 	case 0x60: //STK_PROG_FLASH
 		getch();
 		getch();
@@ -540,13 +507,11 @@ void avrisp()
 		reply(false);
 		break;
 	case 0x64: //STK_PROG_PAGE
-		programPage();
+		programPage(address);
 		break;
-
 	case 0x74: //STK_READ_PAGE 't'
-		readPage();
+		readPage(address);
 		break;
-
 	case 'V': //0x56
 		universal();
 		break;
@@ -565,8 +530,7 @@ void avrisp()
 		_error++;
 		Serial.write(STK_NOSYNC);
 		break;
-		// anything else we will return STK_UNKNOWN
-	default:
+	default: // anything else we will return STK_UNKNOWN
 		_error++;
 		if (CRC_EOP == getch())
 			Serial.write(STK_UNKNOWN);
