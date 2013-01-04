@@ -66,7 +66,7 @@
 
 #define BUFF_LENGTH 256
 
-static uint8_t _error = 0;
+static bool _error = false;
 static bool _programming = false;
 uint8_t _buff[BUFF_LENGTH]; // global block storage
 
@@ -135,7 +135,8 @@ void loop(void)
 {
 	heartbeat();
 
-	avrisp();
+	if (Serial.available())
+		avrisp();
 }
 
 uint8_t getch()
@@ -177,23 +178,31 @@ uint8_t spiTransfer(uint8_t a, uint16_t b, uint8_t c)
 	return spiTransfer(a, highByte(b), lowByte(b), c);
 }
 
-void reply(bool has_byte, byte val, bool send_ok)
+bool receiveEop()
 {
-	if (getch() == CRC_EOP)
-	{
+	bool eop = getch() == CRC_EOP;
+
+	if (eop)
 		Serial.write(STK_INSYNC);
-
-		if (has_byte)
-			Serial.write(val);
-
-		if (send_ok)
-			Serial.write(STK_OK);
-	}
 	else
 	{
-		_error++;
+		_error = true;
 		Serial.write(STK_NOSYNC);
 	}
+
+	return eop;
+}
+
+void reply(bool has_byte, byte val, bool send_ok)
+{
+	if (!receiveEop())
+		return;
+
+	if (has_byte)
+		Serial.write(val);
+
+	if (send_ok)
+		Serial.write(STK_OK);
 }
 
 void replyVersion(uint8_t c)
@@ -284,30 +293,23 @@ void writeFlash(uint16_t address, uint16_t length)
 {
 	if (length > _param.flash_pagesize || length > BUFF_LENGTH)
 	{
-		_error++;
+		_error = true;
 		Serial.write(STK_FAILED);
 		return;
 	}
 
 	fill(length);
 
-	if (getch() == CRC_EOP)
-	{
-		Serial.write(STK_INSYNC);
+	if (!receiveEop())
+		return;
 
-		for (uint8_t *p = _buff, word_length = length >> 1, i = 0;
-				i < word_length; i++)
-		{
-			spiTransfer(0x40, i, *p++);
-			spiTransfer(0x48, i, *p++);
-		}
-		spiTransfer(0x4C, getPage(address), 0);
-	}
-	else
+	for (uint8_t *p = _buff, word_length = length >> 1, i = 0; i < word_length;
+			i++)
 	{
-		_error++;
-		Serial.write(STK_NOSYNC);
+		spiTransfer(0x40, i, *p++);
+		spiTransfer(0x48, i, *p++);
 	}
+	spiTransfer(0x4C, getPage(address), 0);
 
 	Serial.write(STK_OK);
 }
@@ -316,28 +318,21 @@ void writeEeprom(uint16_t address, uint16_t length)
 {
 	if (length > _param.eeprom_size || length > BUFF_LENGTH)
 	{
-		_error++;
+		_error = true;
 		Serial.write(STK_FAILED);
 		return;
 	}
 
 	fill(length);
 
-	if (getch() == CRC_EOP)
-	{
-		Serial.write(STK_INSYNC);
+	if (!receiveEop())
+		return;
 
-		uint8_t * p = _buff;
-		for (uint16_t i = length, addr = address << 1; i--;)
-		{
-			spiTransfer(0xC0, addr++, *p++);
-			delay(4);
-		}
-	}
-	else
+	uint8_t * p = _buff;
+	for (uint16_t i = length, addr = address << 1; i--;)
 	{
-		_error++;
-		Serial.write(STK_NOSYNC);
+		spiTransfer(0xC0, addr++, *p++);
+		delay(4);
 	}
 	Serial.write(STK_OK);
 }
@@ -347,20 +342,21 @@ void programPage(uint16_t address)
 	uint16_t length = (getch() << 8) | getch(); // It is weird that makeWord does not work here
 	uint8_t memtype = getch();
 
-	if (memtype == 'F')
+	switch (memtype)
 	{
+	case 'F':
 		writeFlash(address, length);
-		return;
-	}
-	if (memtype == 'E')
-	{
+		break;
+	case 'E':
 		writeEeprom(address, length);
-		return;
+		break;
+	default:
+		Serial.write(STK_FAILED);
+		break;
 	}
-	Serial.write(STK_FAILED);
 }
 
-uint8_t readFlashPage(uint16_t address, uint16_t length)
+void readFlashPage(uint16_t address, uint16_t length)
 {
 	for (uint16_t i = 0; i < length; i += 2)
 	{
@@ -368,10 +364,10 @@ uint8_t readFlashPage(uint16_t address, uint16_t length)
 		Serial.write(spiTransfer(0x28, address, 0));
 		address++;
 	}
-	return STK_OK;
+	Serial.write(STK_OK);
 }
 
-uint8_t readEepromPage(uint16_t address, uint16_t length)
+void readEepromPage(uint16_t address, uint16_t length)
 {
 	// here again we have a word address
 	for (uint16_t addr = address * 2, i = 0; i < length; i++)
@@ -379,42 +375,36 @@ uint8_t readEepromPage(uint16_t address, uint16_t length)
 		uint8_t ee = spiTransfer(0xA0, addr++, 0xFF);
 		Serial.write(ee);
 	}
-	return STK_OK;
+	Serial.write(STK_OK);
 }
 
 void readPage(uint16_t address)
 {
-	uint8_t result = STK_FAILED;
 	uint16_t length = (getch() << 8) | getch();
 
 	uint8_t memtype = getch();
 
-	if (getch() == CRC_EOP)
+	if (!receiveEop())
+		return;
+
+	switch (memtype)
 	{
-		Serial.write(STK_INSYNC);
-		if (memtype == 'F')
-			result = readFlashPage(address, length);
-		if (memtype == 'E')
-			result = readEepromPage(address, length);
+	case 'F':
+		readFlashPage(address, length);
+		break;
+	case 'E':
+		readEepromPage(address, length);
+		break;
+	default:
+		Serial.write(STK_FAILED);
+		break;
 	}
-	else
-	{
-		_error++;
-		Serial.write(STK_NOSYNC);
-	}
-	Serial.write(result);
 }
 
 void readSignature()
 {
-	if (getch() != CRC_EOP)
-	{
-		_error++;
-		Serial.write(STK_NOSYNC);
+	if (!receiveEop())
 		return;
-	}
-
-	Serial.write(STK_INSYNC);
 
 	Serial.write(spiTransfer(0x30, 0x00, 0x00, 0x00));
 	Serial.write(spiTransfer(0x30, 0x00, 0x01, 0x00));
@@ -431,19 +421,13 @@ void avrisp()
 	{
 	case '0': // signon
 		_error = 0;
-		reply(false);
+		reply();
 		break;
 	case '1':
-		if (getch() == CRC_EOP)
+		if (receiveEop())
 		{
-			Serial.write(STK_INSYNC);
 			Serial.print("AVR ISP");
 			Serial.write(STK_OK);
-		}
-		else
-		{
-			_error++;
-			Serial.write(STK_NOSYNC);
 		}
 		break;
 	case 'A':
@@ -452,36 +436,28 @@ void avrisp()
 	case 'B':
 		fill(20);
 		setParameters();
-		reply(false);
+		reply();
 		break;
 	case 'E': // extended parameters - ignore for now
 		fill(5);
-		reply(false);
+		reply();
 		break;
-
 	case 'P':
-		if (_programming)
-		{
-			pulse(LED_ERROR, 3);
-		}
-		else
-		{
-			beginProgramming();
-		}
-		reply(false);
+		_programming ? pulse(LED_ERROR, 3) : beginProgramming();
+		reply();
 		break;
 	case 'U': // set address (word)
 		address = getch() | (getch() << 8);
-		reply(false);
+		reply();
 		break;
 	case 0x60: //STK_PROG_FLASH
 		getch();
 		getch();
-		reply(false);
+		reply();
 		break;
 	case 0x61: //STK_PROG_DATA
 		getch();
-		reply(false);
+		reply();
 		break;
 	case 0x64: //STK_PROG_PAGE
 		programPage(address);
@@ -495,24 +471,21 @@ void avrisp()
 	case 'Q': //0x51
 		_error = 0;
 		endProgramming();
-		reply(false);
+		reply();
 		break;
-
 	case 0x75: //STK_READ_SIGN 'u'
 		readSignature();
 		break;
 		// expecting a command, not CRC_EOP
 		// this is how we can get back in sync
 	case CRC_EOP:
-		_error++;
+		_error = true;
 		Serial.write(STK_NOSYNC);
 		break;
 	default: // anything else we will return STK_UNKNOWN
-		_error++;
-		if (CRC_EOP == getch())
+		_error = true;
+		if (receiveEop())
 			Serial.write(STK_UNKNOWN);
-		else
-			Serial.write(STK_NOSYNC);
 		break;
 	}
 }
