@@ -135,10 +135,7 @@ void loop(void)
 {
 	heartbeat();
 
-	if (Serial.available())
-	{
-		avrisp();
-	}
+	avrisp();
 }
 
 uint8_t getch()
@@ -298,9 +295,8 @@ void writeFlash(uint16_t address, uint16_t length)
 	{
 		Serial.write(STK_INSYNC);
 
-		uint8_t *p = _buff;
-		uint8_t word_length = length >> 1;
-		for (uint8_t i = 0; i < word_length; i++)
+		for (uint8_t *p = _buff, word_length = length >> 1, i = 0;
+				i < word_length; i++)
 		{
 			spiTransfer(0x40, i, *p++);
 			spiTransfer(0x48, i, *p++);
@@ -327,7 +323,7 @@ void writeEeprom(uint16_t address, uint16_t length)
 
 	fill(length);
 
-	if (CRC_EOP == getch())
+	if (getch() == CRC_EOP)
 	{
 		Serial.write(STK_INSYNC);
 
@@ -348,7 +344,7 @@ void writeEeprom(uint16_t address, uint16_t length)
 
 void programPage(uint16_t address)
 {
-	uint16_t length = (getch() << 8) | getch();	// It is weird that makeWord does not work here
+	uint16_t length = (getch() << 8) | getch(); // It is weird that makeWord does not work here
 	uint8_t memtype = getch();
 
 	if (memtype == 'F')
@@ -411,19 +407,19 @@ void readPage(uint16_t address)
 
 void readSignature()
 {
-	if (CRC_EOP != getch())
+	if (getch() != CRC_EOP)
 	{
 		_error++;
 		Serial.write(STK_NOSYNC);
 		return;
 	}
+
 	Serial.write(STK_INSYNC);
-	uint8_t high = spiTransfer(0x30, 0x00, 0x00, 0x00);
-	Serial.write(high);
-	uint8_t middle = spiTransfer(0x30, 0x00, 0x01, 0x00);
-	Serial.write(middle);
-	uint8_t low = spiTransfer(0x30, 0x00, 0x02, 0x00);
-	Serial.write(low);
+
+	Serial.write(spiTransfer(0x30, 0x00, 0x00, 0x00));
+	Serial.write(spiTransfer(0x30, 0x00, 0x01, 0x00));
+	Serial.write(spiTransfer(0x30, 0x00, 0x02, 0x00));
+
 	Serial.write(STK_OK);
 }
 
