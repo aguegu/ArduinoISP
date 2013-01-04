@@ -82,7 +82,7 @@ typedef struct param
 	uint8_t fuse_bytes;
 	uint8_t flash_poll;
 	uint16_t eeprom_poll;
-	uint16_t flash_pagesize;
+	uint16_t flash_pagesize; // in bytes
 	uint16_t eeprom_size;
 	uint32_t flash_size;
 } parameter;
@@ -115,8 +115,10 @@ void setup()
 
 	SPI.setDataMode(0);
 	SPI.setBitOrder(MSBFIRST);
+
 	// Clock Div can be 2,4,8,16,32,64, or 128
-	SPI.setClockDivider(SPI_CLOCK_DIV32);
+	// if the target is m8 runs at 16MHz, the spi could run at SPI_CLOCK_DIV4
+	SPI.setClockDivider(SPI_CLOCK_DIV8);
 
 	pinMode(LED_PROGRAMMING, OUTPUT);
 	pulse(LED_PROGRAMMING, 2);
@@ -278,25 +280,7 @@ void universal()
 
 uint16_t getPage(uint16_t addr)
 {
-	uint16_t page = addr;
-
-	switch (_param.flash_pagesize)
-	{
-	case 32:
-		page &= 0xFFF0;
-		break;
-	case 64:
-		page &= 0xFFE0;
-		break;
-	case 128:
-		page &= 0xFFC0;
-		break;
-	case 256:
-		page &= 0xFF80;
-		break;
-	}
-
-	return page;
+	return addr & ~((_param.flash_pagesize >> 1) - 1);
 }
 
 void writeFlash(uint16_t address, uint16_t length)
@@ -364,9 +348,7 @@ void writeEeprom(uint16_t address, uint16_t length)
 
 void programPage(uint16_t address)
 {
-	uint16_t length = 256 * getch();
-	length += getch();
-
+	uint16_t length = (getch() << 8) | getch();	// It is weird that makeWord does not work here
 	uint8_t memtype = getch();
 
 	if (memtype == 'F')
@@ -407,8 +389,8 @@ uint8_t readEepromPage(uint16_t address, uint16_t length)
 void readPage(uint16_t address)
 {
 	uint8_t result = STK_FAILED;
-	uint16_t length = 256 * getch();
-	length += getch();
+	uint16_t length = (getch() << 8) | getch();
+
 	uint8_t memtype = getch();
 
 	if (getch() == CRC_EOP)
@@ -493,8 +475,7 @@ void avrisp()
 		reply(false);
 		break;
 	case 'U': // set address (word)
-		address = getch();
-		address += 256 * getch();
+		address = getch() | (getch() << 8);
 		reply(false);
 		break;
 	case 0x60: //STK_PROG_FLASH
